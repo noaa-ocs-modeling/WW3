@@ -6,7 +6,7 @@
 !/                  | WAVEWATCH III           NOAA/NCEP |
 !/                  |           H. L. Tolman            |
 !/                  |                        FORTRAN 90 |
-!/                  | Last update :         15-May-2018 |
+!/                  | Last update :         22-Mar-2021 |
 !/                  +-----------------------------------+
 !/
 !/    13-Jun-2005 : Origination.                        ( version 3.07 )
@@ -43,6 +43,7 @@
 !/                  Add ESMF override for STIME & ETIME ( version 6.02 )
 !/                  (T. J. Campbell, NRL)
 !/    15-May-2018 : Update namelist                     ( version 6.05 )
+!/    22-Mar-2021 : Add momentum and air density input  ( version 7.xx )
 !/
 !/    Copyright 2009-2014 National Weather Service (NWS),
 !/       National Oceanic and Atmospheric Administration.  All rights
@@ -96,7 +97,7 @@
 !/                  | WAVEWATCH III           NOAA/NCEP |
 !/                  |           H. L. Tolman            |
 !/                  |                        FORTRAN 90 |
-!/                  | Last update :         20-Jan-2017 |
+!/                  | Last update :         22-Mar-2021 |
 !/                  +-----------------------------------+
 !/
 !/    13-Jun-2005 : Origination.                        ( version 3.07 )
@@ -138,6 +139,7 @@
 !/    20-Jan-2017 : Modify input forcing flags to support coupler input.
 !/                  Add ESMF override for STIME & ETIME ( version 6.02 )
 !/                  (T. J. Campbell, NRL)
+!/    22-Mar-2021 : Add momentum and air density input  ( version 7.xx )
 !/
 !  1. Purpose :
 !
@@ -234,7 +236,7 @@
 !       time by using /var/tmp/ for log files. 
 !       See commented line at "OPEN (MDSO,FILE=..."
 !
-!     - IDFLDS dimensioning is hardwired as IDFLDS(-7:7) where lowest possible 
+!     - IDFLDS dimensioning is hardwired as IDFLDS(-7:9) where lowest possible 
 !       value of JFIRST is JFIRST=-7
 !
 !  8. Structure :
@@ -377,6 +379,8 @@
 !/MPI                          MPI_COMM_BCT, CROOT, FBCAST
 !/MPRF      USE WMMDATMD, ONLY: MDSP
       USE W3INITMD, ONLY: WWVER
+      USE W3ODATMD, ONLY:  OFILES
+! 
 !/
       IMPLICIT NONE
 !
@@ -407,40 +411,46 @@
       INTEGER, ALLOCATABLE    :: MDS(:,:), NTRACE(:,:), ODAT(:,:),    &
                                  TMPRNK(:), TMPGRP(:), NINGRP(:),     &
                                  TMOVE(:,:), LOADMP(:,:), IPRT(:,:),  &
-                                 NDPOUT(:)
+                                 NDPOUT(:), OUTFF(:,:)
       REAL                    :: DTTST, XX, YY
+
 !/MPRF      REAL                    :: PRFT0, PRFTN
 !/MPRF      REAL(KIND=8)            :: get_memory
       REAL, ALLOCATABLE       :: X(:), Y(:), AMOVE(:), DMOVE(:),      &
                                  RP1(:), RPN(:)
-      LOGICAL                 :: FLT, TFLAGI, TFLAGS(-7:12), PSHARE
+      LOGICAL                 :: FLT, TFLAGI, TFLAGS(-7:14), PSHARE
       LOGICAL, ALLOCATABLE    :: FLGRD(:,:,:), FLRBPI(:), BCDTMP(:),   &
                                  USEINP(:), LPRT(:), FLGR2(:,:,:),     &
                                  FLGD(:,:), FLG2(:,:), FLG2D(:,:),     &
                                  FLG1D(:), CPLINP(:)
       CHARACTER(LEN=1)        :: COMSTR
-      CHARACTER(LEN=3)        :: IDSTR(7), IDTST
+      CHARACTER(LEN=3)        :: IDSTR(9), IDTST
       CHARACTER(LEN=5)        :: STOUT, OUTSTR(6)
-      CHARACTER(LEN=6)        :: ACTION(9), YESXX, XXXNO
+      CHARACTER(LEN=6)        :: ACTION(11), YESXX, XXXNO
       CHARACTER(LEN=8)        :: LFILE, STTIME
 !/SHRD      CHARACTER(LEN=9)        :: TFILE
-      CHARACTER(LEN=13)       :: STDATE, PN, MN, TNAMES(7)
+      CHARACTER(LEN=13)       :: STDATE, MN, TNAMES(9)
+      CHARACTER(LEN=40)       :: PN
       CHARACTER(LEN=13),                                              &
-                  ALLOCATABLE :: INAMES(:,:), MNAMES(:), PNAMES(:)
+                  ALLOCATABLE :: INAMES(:,:), MNAMES(:)
+      CHARACTER(LEN=40),                                              &
+                  ALLOCATABLE :: PNAMES(:)
       CHARACTER(LEN=12)       :: FORMAT
 !/DIST      CHARACTER(LEN=18)       :: TFILE
 !/MPRF      CHARACTER(LEN=18)       :: PFILE
 
-      CHARACTER(LEN=13)       :: IDFLDS(-7:7)
+      CHARACTER(LEN=13)       :: IDFLDS(-7:9)
       CHARACTER(LEN=23)       :: DTME21
-      CHARACTER(LEN=30)       :: IDOTYP(7)
+      CHARACTER(LEN=30)       :: IDOTYP(8)
       CHARACTER(LEN=80)       :: TNAME
       CHARACTER(LEN=80)       :: LINE
-!
+      CHARACTER(LEN=80)       :: LINEIN
+      CHARACTER(LEN=8)        :: WORDS(6)
+
       TYPE OT2TPE
         INTEGER                    :: NPTS
         REAL, POINTER              :: X(:), Y(:)
-        CHARACTER(LEN=10), POINTER :: PNAMES(:)
+        CHARACTER(LEN=40), POINTER :: PNAMES(:)
       END TYPE OT2TPE
 !
       TYPE(OT2TPE), ALLOCATABLE    :: OT2(:)
@@ -455,6 +465,7 @@
                     'mud viscos.  ' ,                                 &
                     'water levels ' , 'currents     ' ,               &
                     'winds        ' , 'ice fields   ' ,               &
+                    'momentum     ' , 'air density  ' ,               &
                     'mean param.  ' , '1D spectra   ' ,               &
                     '2D spectra   ' /
 !
@@ -464,9 +475,11 @@
                     'Restart files                 ' ,                &
                     'Nesting data                  ' ,                &
                     'Separated wave field data     ' ,                &
-                    'Fields for coupling           ' /
+                    'Fields for coupling           ' ,                &
+                    'Restart files second request  '/
 !
-      DATA IDSTR  / 'LEV', 'CUR', 'WND', 'ICE', 'DT0', 'DT1', 'DT2' /
+      DATA IDSTR  / 'LEV', 'CUR', 'WND', 'ICE', 'TAU', 'RHO',         &
+                    'DT0', 'DT1', 'DT2' /
 !
       DATA YESXX  / 'YES/--' /
       DATA XXXNO  / '---/NO' /
@@ -644,15 +657,17 @@
 !
 ! 2.c Set up I/O for individual models (initial)
 !
-      ALLOCATE ( MDS(13,NRGRD), NTRACE(2,NRGRD), ODAT(35,0:NRGRD),    &
+      ALLOCATE ( MDS(13,NRGRD), NTRACE(2,NRGRD), ODAT(40,0:NRGRD),    &
            FLGRD(NOGRP,NGRPP,NRGRD), OT2(0:NRGRD), FLGD(NOGRP,NRGRD), &
-           MDSF(-NRINP:NRGRD,JFIRST:7), IPRT(6,NRGRD), LPRT(NRGRD),   &
+           MDSF(-NRINP:NRGRD,JFIRST:9), IPRT(6,NRGRD), LPRT(NRGRD),   &
            FLGR2(NOGRP,NGRPP,NRGRD),FLG2D(NOGRP,NGRPP), FLG1D(NOGRP), &
-           FLG2(NOGRP,NRGRD) )
+           FLG2(NOGRP,NRGRD),OUTFF(7,0:NRGRD))
 !
       MDS    = -1
       MDSF   = -1
       FLGR2  = .FALSE.
+      FLG2   = .FALSE.
+      LPRT   = .FALSE.
       IPRT   = 0
 !
 ! ... Fixed and recycleable unit numbers.      
@@ -694,7 +709,7 @@
 !                   sources, and from communication rather than
 !                   files.
 !
-      ALLOCATE ( INAMES(2*NRGRD,JFIRST:7), MNAMES(-NRINP:2*NRGRD),   &
+      ALLOCATE ( INAMES(2*NRGRD,JFIRST:9), MNAMES(-NRINP:2*NRGRD),   &
                  TMPRNK(2*NRGRD), TMPGRP(2*NRGRD), NINGRP(2*NRGRD),  &
                  RP1(2*NRGRD), RPN(2*NRGRD), BCDTMP(NRGRD+1:2*NRGRD) )
       ALLOCATE ( GRANK(NRGRD), GRGRP(NRGRD), USEINP(NRINP) )
@@ -715,7 +730,7 @@
         CALL NEXTLN ( COMSTR , MDSI , MDSE2 )
         CALL W3SETI ( -I, MDSE, MDST )
         INFLAGS1 = .FALSE.
-        READ (MDSI,*,END=2001,ERR=2002) MNAMES(-I), INFLAGS1(JFIRST:7)
+        READ (MDSI,*,END=2001,ERR=2002) MNAMES(-I), INFLAGS1(JFIRST:9)
 !
         END DO
 !
@@ -762,8 +777,8 @@
               I      = I + 1
               CALL W3SETI ( I, MDSE, MDST )
               INFLAGS1      = .FALSE.
-!/MGW              INFLAGS1(8)   = .TRUE.
-!/MGP              INFLAGS1(8)   = .TRUE.
+!/MGW              INFLAGS1(10)   = .TRUE.
+!/MGP              INFLAGS1(10)   = .TRUE.
               INAMES(I,:)= INAMES(J,:)
               MNAMES(I)  = MNAMES(J)
               TMPRNK(I)  = TMPRNK(J)
@@ -781,13 +796,13 @@
 !
 ! 3.a.5 Set input flags
 !
-      ALLOCATE ( INPMAP(NRGRD,JFIRST:8), IDINP(-NRINP:NRGRD,JFIRST:8) )
+      ALLOCATE ( INPMAP(NRGRD,JFIRST:10), IDINP(-NRINP:NRGRD,JFIRST:10) )
       INPMAP = 0
       IDINP  = '---'
 !
       DO I=1, NRGRD
          CALL W3SETI ( I, MDSE, MDST )
-         DO J=JFIRST, 7
+         DO J=JFIRST, 9
             IF ( INAMES(I,J) .EQ. 'native' ) THEN
             ! *** forcing input from file & defined on the native grid ***
                 INFLAGS1(J) = .TRUE.
@@ -828,7 +843,7 @@
 !        INFLAGS2 is initial value of INFLAGS1. Unlike INFLAGS1, 
 !           it does not change during the simulation
          IF(.NOT. INFLAGS2(J)) INFLAGS2(J)=INFLAGS1(J)
-         END DO !         DO J=JFIRST, 7
+         END DO !         DO J=JFIRST, 9
       END DO !      DO I=1, NRGRD
 !
       DO I=1, NRINP
@@ -844,7 +859,7 @@
       DO I=-NRINP, NRGRD
         IF ( I .EQ. 0 ) CYCLE
         CALL W3SETI ( I, MDSE, MDST )
-        DO J=JFIRST, 7
+        DO J=JFIRST, 9
           IF ( I .GE. 1 ) THEN
               IF ( INPMAP(I,J) .LT. 0 ) CYCLE
             END IF
@@ -860,7 +875,7 @@
 !/T      WRITE (MDST,9022)
 !/T      DO I=-NRINP, NRGRD
 !/T        IF ( I .EQ. 0 ) CYCLE
-!/T        WRITE (MDST,9021) I, MDSF(I,JFIRST:7)
+!/T        WRITE (MDST,9021) I, MDSF(I,JFIRST:9)
 !/T        END DO
 !
 ! 3.c Set rank and group data
@@ -957,18 +972,18 @@
           DO I=1, NRINP
             IF ( .NOT. USEINP(I) ) CYCLE
             CALL W3SETI ( -I, MDSE, MDST )
-            ACTION(1:4) = '---   '
-            DO J=JFIRST, 4
+            ACTION(1:6) = '---   '
+            DO J=JFIRST, 6
               IF ( INFLAGS1(J) ) ACTION(J) = ' X    '
               END DO
-            ACTION(5:7) = '-     '
-            IF ( INFLAGS1(5) ) ACTION(5) = '1     '
-            IF ( INFLAGS1(6) ) ACTION(6) = '2     '
-            IF ( INFLAGS1(7) ) ACTION(7) = '3     '
+            ACTION(7:9) = '-     '
+            IF ( INFLAGS1(7) ) ACTION(7) = '1     '
+            IF ( INFLAGS1(8) ) ACTION(8) = '2     '
+            IF ( INFLAGS1(9) ) ACTION(9) = '3     '
             IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC )                &
-                WRITE (MDSS,925) I, MNAMES(-I), ACTION(JFIRST:7)
+                WRITE (MDSS,925) I, MNAMES(-I), ACTION(JFIRST:9)
             IF ( NMPLOG .EQ. IMPROC )                                 &
-                WRITE (MDSO,925) I, MNAMES(-I), ACTION(JFIRST:7)
+                WRITE (MDSO,925) I, MNAMES(-I), ACTION(JFIRST:9)
             END DO
           IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC ) WRITE (MDSS,926)
           IF ( NMPLOG .EQ. IMPROC ) WRITE (MDSO,926)
@@ -989,8 +1004,8 @@
       IF ( NMPLOG .EQ. IMPROC ) WRITE (MDSO,930)
       DO I=1, NRGRD
         CALL W3SETI ( I, MDSE, MDST )
-        ACTION(1:4) = '---   '
-        DO J=JFIRST, 4
+        ACTION(1:6) = '---   '
+        DO J=JFIRST, 6
           IF ( INFLAGS1(J) .AND. INPMAP(I,J) .EQ. 0 ) THEN
               ACTION(J) = 'native'
             ELSE IF ( INFLAGS1(J) .AND. INPMAP(I,J) .EQ. -999 ) THEN
@@ -1001,22 +1016,22 @@
               ACTION(J) = MNAMES( INPMAP(I,J))
             END IF
           END DO
-        ACTION(5:9) = '-     '
-        IF ( INFLAGS1(5) ) ACTION(5) = '1     '
-        IF ( INFLAGS1(6) ) ACTION(6) = '2     '
-        IF ( INFLAGS1(7) ) ACTION(7) = '3     '
-        IF ( INFLAGS1(8) ) THEN
-            ACTION(8) = 'yes   '
+        ACTION(7:11) = '-     '
+        IF ( INFLAGS1(7) ) ACTION(7) = '1     '
+        IF ( INFLAGS1(8) ) ACTION(8) = '2     '
+        IF ( INFLAGS1(9) ) ACTION(9) = '3     '
+        IF ( INFLAGS1(10) ) THEN
+            ACTION(10) = 'yes   '
           ELSE
-            ACTION(8) = 'no    '
+            ACTION(10) = 'no    '
           END IF
-        IF ( BCDUMP(I) ) ACTION(9) = 'y     '
+        IF ( BCDUMP(I) ) ACTION(11) = 'y     '
         IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC )                    &
-            WRITE (MDSS,931) I, MNAMES(I), ACTION(1:8), GRANK(I),     &
-                             GRGRP(I), ACTION(9)
+            WRITE (MDSS,931) I, MNAMES(I), ACTION(1:10), GRANK(I),     &
+                             GRGRP(I), ACTION(11)
         IF ( NMPLOG .EQ. IMPROC )                                     &
-            WRITE (MDSO,931) I, MNAMES(I), ACTION(1:8), GRANK(I),     &
-                             GRGRP(I), ACTION(9)
+            WRITE (MDSO,931) I, MNAMES(I), ACTION(1:10), GRANK(I),     &
+                             GRGRP(I), ACTION(11)
       END DO
       IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC ) WRITE (MDSS,932)
       IF ( NMPLOG .EQ. IMPROC ) WRITE (MDSO,932)
@@ -1067,6 +1082,7 @@
         ELSE
           READ (MDSI,*,END=2001,ERR=2002) STIME, ETIME
         END IF
+!
       CALL STME21 ( STIME , DTME21 )
       IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC ) WRITE (MDSS,941) DTME21
       CALL STME21 ( ETIME , DTME21 )
@@ -1110,9 +1126,57 @@
 ! 5.b Process standard line
 !
         CALL NEXTLN ( COMSTR , MDSI , MDSE2 )
-        READ (MDSI,*,END=2001,ERR=2002) (ODAT(I,1),I=5*(J-1)+1,5*J)
+!
+        IF(J .LE. 2) THEN
+          WORDS(1:6)=''
+          READ (MDSI,'(A)') LINEIN
+          READ(LINEIN,*,iostat=ierr) WORDS
+!        
+          IF(J .LE. 1) THEN
+            READ(WORDS( 1 ), * ) ODAT(1,1)
+            READ(WORDS( 2 ), * ) ODAT(2,1)
+            READ(WORDS( 3 ), * ) ODAT(3,1)
+            READ(WORDS( 4 ), * ) ODAT(4,1)
+            READ(WORDS( 5 ), * ) ODAT(5,1)
+          ELSE
+            READ(WORDS( 1 ), * ) ODAT(6,1)
+            READ(WORDS( 2 ), * ) ODAT(7,1)
+            READ(WORDS( 3 ), * ) ODAT(8,1)
+            READ(WORDS( 4 ), * ) ODAT(9,1)
+            READ(WORDS( 5 ), * ) ODAT(10,1)
+          END IF
+
+          IF (WORDS(6) .NE. '0' .AND. WORDS(6) .NE. '1') THEN
+            OUTFF(J,1)=0
+          ELSE
+            READ(WORDS( 6 ), * ) OUTFF(J,1)
+!            print*,' Number of data: ', 6
+          END IF
+! CHECKPOINT
+        ELSE IF(J .EQ. 4) THEN
+            WORDS(1:6)=''
+            READ (MDSI,'(A)') LINEIN
+            READ(LINEIN,*,iostat=ierr) WORDS
+!
+            READ(WORDS( 1 ), * ) ODAT(16,1)
+            READ(WORDS( 2 ), * ) ODAT(17,1)
+            READ(WORDS( 3 ), * ) ODAT(18,1)
+            READ(WORDS( 4 ), * ) ODAT(19,1)
+            READ(WORDS( 5 ), * ) ODAT(20,1)
+            IF (WORDS(6) .EQ. 'T') THEN
+              CALL NEXTLN ( COMSTR , MDSI , MDSE2 )
+              READ (MDSI,*,END=2001,ERR=2002)(ODAT(I,1),I=5*(8-1)+1,5*8)
+              END IF
+        ELSE
+          READ (MDSI,*,END=2001,ERR=2002)(ODAT(I,1),I=5*(J-1)+1,5*J)
+          OUTFF(J,1) = 0
+        END IF
+!
+        OUTPTS(1)%OFILES(J)=OUTFF(J,1)
+!         
+!
         ODAT(5*(J-1)+3,1) = MAX ( 0 , ODAT(5*(J-1)+3,1) )
-!                 
+!
         IF ( ODAT(5*(J-1)+3,1) .NE. 0 ) THEN
             IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC )                &
                 WRITE (MDSS,951) J, IDOTYP(J)
@@ -1142,6 +1206,7 @@
                   DTME21(I:I) = ' '
                   END DO
                 WRITE (MDSS,954) DTME21(1:19)
+
               END IF
             IF ( J .EQ. 1 ) THEN
 !
@@ -1277,16 +1342,54 @@
 ! ... End of loop in 5.a
 !
         END DO
+!xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+! Checkpoint
+       J=8
+        IF ( ODAT(5*(J-1)+3,1) .NE. 0 ) THEN
+            IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC )                &
+                WRITE (MDSS,951) J, IDOTYP(J)
+            TTIME(1) = ODAT(5*(J-1)+1,1)
+            TTIME(2) = ODAT(5*(J-1)+2,1)
+            CALL STME21 ( TTIME , DTME21 )
+            IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC )                &
+                 WRITE (MDSS,952) DTME21
+            TTIME(1) = ODAT(5*(J-1)+4,1)
+            TTIME(2) = ODAT(5*(J-1)+5,1)
+            CALL STME21 ( TTIME , DTME21 )
+            IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC )                &
+                 WRITE (MDSS,953) DTME21
+            TTIME(1) = 0
+            TTIME(2) = 0
+            DTTST    = REAL ( ODAT(5*(J-1)+3,1) )
+            CALL TICK21 ( TTIME , DTTST  )
+            CALL STME21 ( TTIME , DTME21 )
+            IF ( ( ODAT(5*(J-1)+1,1) .NE. ODAT(5*(J-1)+4,1) .OR.      &
+                   ODAT(5*(J-1)+2,1) .NE. ODAT(5*(J-1)+5,1) ) .AND.   &
+                   MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC ) THEN
+                DO I=1, 18
+                  IF ( DTME21(I:I).NE.'0' .AND.                       &
+                       DTME21(I:I).NE.'/' .AND.                       &
+                       DTME21(I:I).NE.' ' .AND.                       &
+                       DTME21(I:I).NE.':' ) EXIT
+                  DTME21(I:I) = ' '
+                  END DO
+                WRITE (MDSS,954) DTME21(1:19)
+              END IF
+        END IF
+!xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 !
 ! 5.i Set all grids to unified output
 !
       IF ( UNIPTS ) THEN
         ODAT(6:10,0) = ODAT(6:10,1)
         ODAT( 8 , 1) = 0
+        OUTPTS(1)%OFILES(1)   = OUTFF(1,1)
         END IF
 !
       DO I=2, NRGRD
         ODAT(:,I)  = ODAT(:,1)
+        OUTFF(:,I) = OUTFF(:,1)
+        OUTPTS(I)%OFILES(:)=OUTFF(:,1)
         FLGD(:,I) = FLGD(:,1)
         FLGRD(:,:,I) = FLGRD(:,:,1)
         FLG2(:,I) = FLG2(:,1)
@@ -1355,7 +1458,37 @@
 ! 5.k Process standard line
 !
         CALL NEXTLN ( COMSTR , MDSI , MDSE2 )
-        READ (MDSI,*,END=2001,ERR=2002) (ODAT(II,I),II=5*(J-1)+1,5*J)
+        IF(J .LE. 2) THEN
+          OUTFF(J,I)=0
+          WORDS(1:6) =''
+          READ (MDSI,'(A)') LINEIN
+          READ(LINEIN,*,iostat=ierr) WORDS
+          IF(J .EQ. 1) THEN
+            READ(WORDS( 1 ), * ) ODAT(1,I)
+            READ(WORDS( 2 ), * ) ODAT(2,I)
+            READ(WORDS( 3 ), * ) ODAT(3,I)
+            READ(WORDS( 4 ), * ) ODAT(4,I)
+            READ(WORDS( 5 ), * ) ODAT(5,I)
+          ELSE
+            READ(WORDS( 1 ), * ) ODAT(6,I)
+            READ(WORDS( 2 ), * ) ODAT(7,I)
+            READ(WORDS( 3 ), * ) ODAT(8,I)
+            READ(WORDS( 4 ), * ) ODAT(9,I)
+            READ(WORDS( 5 ), * ) ODAT(10,I)
+          END IF
+          IF (WORDS(6) .NE. '0' .AND. WORDS(6) .NE. '1') THEN
+            OUTFF(J,I)=0
+          ELSE
+            READ(WORDS( 6 ), * ) OUTFF(J,I)
+          END IF
+!
+        ELSE
+          READ (MDSI,*,END=2001,ERR=2002)(ODAT(II,I),II=5*(J-1)+1,5*J)
+          OUTFF(J,I) = 0
+        END IF
+!         
+        OUTPTS(I)%OFILES(J)=OUTFF(J,I)
+!
         ODAT(5*(J-1)+3,I) = MAX ( 0 , ODAT(5*(J-1)+3,I) )
 ! 
         IF ( ODAT(5*(J-1)+3,I) .NE. 0 ) THEN
@@ -1514,6 +1647,7 @@
 !/T      DO I=1, NRGRD
 !/T          WRITE (MDST,9050) I
 !/T          WRITE (MDST,9051) ODAT(:,I)
+!/T          WRITE (MDST,9051) OUTFF(:,I)
 !/T          WRITE (MDST,9052) FLGRD(:,:,I)
 !/T        END DO
 !
@@ -1523,7 +1657,7 @@
 !     the grids, because this is only intended for test cases. 
 !     For true implementations, the jumping grid will be used.
 !
-      IF ( INFLAGS1(8) ) THEN
+      IF ( INFLAGS1(10) ) THEN
 !
           IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC ) THEN
               WRITE (MDSS,965)
@@ -2047,10 +2181,11 @@
 !
         IF ( MDSS.NE.MDSO .AND. NMPSC2.EQ.IMPROC ) WRITE (MDSS,982)
 
-        CALL W3INIT ( I, .TRUE., MNAMES(I), MDS(:,I), NTRACE(:,I), ODAT(:,I), &
+        CALL W3INIT ( I, .TRUE., MNAMES(I), MDS(:,I), NTRACE(:,I),    &
+                      ODAT(:,I),                          &
                       FLGRD(:,:,I),FLGR2(:,:,I),FLGD(:,I),FLG2(:,I),  &
                       OT2(I)%NPTS, OT2(I)%X, OT2(I)%Y, OT2(I)%PNAMES, &
-                      IPRT(:,I), LPRT(I), MPI_COMM_LOC )
+                      IPRT(:,I), LPRT(I), MPI_COMM_LOC)
 !
 ! ..... Finalize I/O file hook up
 !
@@ -2142,7 +2277,7 @@
 !
 ! ..... regular input files
 !
-        DO J=JFIRST, 4
+        DO J=JFIRST, 6
           IF ( INFLAGS1(J) ) THEN
               IDINP(I,J) = IDSTR(J)
               IF ( INPMAP(I,J) .LT. 0 ) CYCLE
@@ -2164,7 +2299,7 @@
 !
 ! ..... finalize file info data base
 !
-        DO J=JFIRST, 7
+        DO J=JFIRST, 9
           IF ( MDSF(I,J) .NE. -1 ) CALL WMUINQ ( MDSE, MDST, MDSF(I,J) )
           END DO
 !
@@ -2184,7 +2319,7 @@
 
         TFLAGS = INFLAGS1
 !
-        DO J=JFIRST, 7
+        DO J=JFIRST, 9
           IF ( INPMAP(I,J) .NE. 0 ) THEN
 !
               TFLAGS(J) = .TRUE.
@@ -2205,8 +2340,13 @@
                                        WADATS(I)%AS0(NSEA) ,          &
                                        WADATS(I)%ASI(NSEA) )
 !
+              IF ( J.EQ.5 ) ALLOCATE ( WADATS(I)%MA0(NSEA) ,          &
+                                       WADATS(I)%MAI(NSEA) ,          &
+                                       WADATS(I)%MD0(NSEA) ,          &
+                                       WADATS(I)%MDI(NSEA) )
+!
           END IF !  IF ( INPMAP(I,J) .NE. 0 ) THEN
-        END DO !  DO J=JFIRST, 7
+        END DO !  DO J=JFIRST, 9
 !
         INFLAGS1  = TFLAGS
         CALL W3SETI ( I, MDSE, MDST )
@@ -2224,6 +2364,18 @@
                 ENDIF
             END IF
           END DO
+!
+! CHECKPOINT
+        J=8
+        IF ( FLOUT(J) ) THEN
+           IF ( TOUTP(1,I) .EQ. -1 ) THEN
+              TOUTP(:,I) = TONEXT(:,J)
+           ELSE
+              DTTST  = DSEC21 ( TOUTP(:,I), TONEXT(:,J) )
+              IF ( DTTST .LT. 0. ) TOUTP(:,I) = TONEXT(:,J)
+           ENDIF
+        END IF
+!
 !
         GRSTAT(I) =  0
         TSYNC(:,I) = TIME(:)
@@ -2323,13 +2475,13 @@
 !/MPI            CALL MPI_BCAST ( NBI  , 1, MPI_INTEGER, 0,           &
 !/MPI                             MPI_COMM_BCT, IERR_MPI )
 !
-!/MPI            CALL MPI_BCAST ( FLOUT,  7, MPI_LOGICAL, 0,          &
+!/MPI            CALL MPI_BCAST ( FLOUT,  8, MPI_LOGICAL, 0,          &
 !/MPI                             MPI_COMM_BCT, IERR_MPI )
-!/MPI            CALL MPI_BCAST ( DTOUT , 7, MPI_REAL, 0,             &
+!/MPI            CALL MPI_BCAST ( DTOUT , 8, MPI_REAL, 0,             &
 !/MPI                             MPI_COMM_BCT, IERR_MPI )
-!/MPI            CALL MPI_BCAST ( TONEXT,14, MPI_INTEGER, 0,          &
+!/MPI            CALL MPI_BCAST ( TONEXT,16, MPI_INTEGER, 0,          &
 !/MPI                             MPI_COMM_BCT, IERR_MPI )
-!/MPI            CALL MPI_BCAST ( TOLAST,14, MPI_INTEGER, 0,          &
+!/MPI            CALL MPI_BCAST ( TOLAST,16, MPI_INTEGER, 0,          &
 !/MPI                             MPI_COMM_BCT, IERR_MPI )
 !
 !/MPI          END IF
@@ -2377,7 +2529,7 @@
 !
         IF ( CPLINP(I) ) CYCLE
 !
-        DO J=JFIRST, 4
+        DO J=JFIRST, 6
           IF ( INFLAGS1(J) ) THEN
               IDINP(-I,J) = IDSTR(J)
               CALL W3FLDO ('READ', IDINP(-I,J), MDSF(-I,J), MDST,     &
@@ -2394,7 +2546,7 @@
 !
 ! Skipping assimilation input files for now.
 !
-          DO J=JFIRST, 7
+          DO J=JFIRST, 9
             IF ( MDSF(-I,J) .NE. -1 ) CALL WMUINQ                     &
                                          ( MDSE, MDST, MDSF(-I,J) )
             END DO
@@ -2402,7 +2554,7 @@
         END DO
 !
       DO I=1, NRGRD
-        DO J=JFIRST, 7
+        DO J=JFIRST, 9
           IF  ( INPMAP(I,J).LT.0 .AND. INPMAP(I,J).NE.-999) IDINP(I,J) = IDINP( INPMAP(I,J),J)
           !IF ( INPMAP(I,J) .LT. 0 ) IDINP(I,J) = IDINP( INPMAP(I,J),J)
           IF ( INPMAP(I,J) .GT. 0 ) IDINP(I,J) = IDINP(-INPMAP(I,J),J)
@@ -2526,6 +2678,8 @@
           OUTPTS(0)%DTOUT (  2) = REAL ( ODAT( 8,0) )
           OUTPTS(0)%TOLAST(1,2) =        ODAT( 9,0)
           OUTPTS(0)%TOLAST(2,2) =        ODAT(10,0)
+          OUTPTS(0)%OFILES(1)   =        OUTFF(1,1)
+          OUTPTS(0)%OFILES(2)   =        OUTFF(2,1)
 !
           TOUT   = OUTPTS(0)%TONEXT(:,2)
           TLST   = OUTPTS(0)%TOLAST(:,2)
@@ -2671,7 +2825,8 @@
       IF ( TSTOUT ) CALL WMUDMP ( MDST, 0 )
 !
       DEALLOCATE ( MDS, NTRACE, ODAT, FLGRD, FLGR2, FLGD, FLG2, INAMES,&
-                   MNAMES )
+                   MNAMES                                              &
+                   ,OUTFF )
 !
 !/MPI      CALL MPI_BARRIER ( MPI_COMM_MWAVE, IERR_MPI )
 !
@@ -2800,10 +2955,13 @@
  3923 FORMAT ( '  Grids share output procs : ',A)
 !
   924 FORMAT (/'  Input grid information : '/                         &
-               '  nr extension  lev.   cur.   wind   ice    data'/    &
-               ' -------------------------------------------------')
-  925 FORMAT (1X,I3,1X,A10,4(1X,A6),3(1X,A1))
-  926 FORMAT ( ' -------------------------------------------------')
+               '  nr extension  lev.   cur.   wind   ice    tau',     &
+               '    rho    data'/    &
+               ' ----------------------------------------------',     &
+               '--------------')
+  925 FORMAT (1X,I3,1X,A10,6(1X,A6),3(1X,A1))
+  926 FORMAT ( ' ----------------------------------------------',     &
+               '--------------')
 !
   927 FORMAT (/'  Grid for point output : '/                          &
                '  nr extension  '/ ' ---------------')
@@ -2811,13 +2969,13 @@
   929 FORMAT ( ' ---------------')
 !
   930 FORMAT (/'  Wave grid information : '/                          &
-               '  nr extension  lev.   cur.   wind   ice    data',    &
-               '   move1 rnk grp dmp'/                                &
-               ' -----------------------------------------------',    &
-               '---------------------')
-  931 FORMAT (1X,I3,1X,A10,4(1X,A6),3(1X,A1),2X,A4,2I4,3X,A1)
+               '  nr extension  lev.   cur.   wind   ice    tau',     &
+               '    rho    data   move1 rnk grp dmp'/                 &
+               ' ----------------------------------------------',     &
+               '-----------------------------------')
+  931 FORMAT (1X,I3,1X,A10,6(1X,A6),3(1X,A1),2X,A4,2I4,3X,A1)
   932 FORMAT ( ' -----------------------------------------------',    &
-               '---------------------'/)
+               '-----------------------------------'/)
   933 FORMAT ( '  ',A,' : '/                                          &
                '  nr   grids (part of comm.)'/                        &
                ' -----------------------------------------------',    &
@@ -2969,7 +3127,7 @@
 !/T                               15X,'GRID MDS(1-13)',43X,'NTRACE')
 !/T 9021 FORMAT (14X,16I4)
 !/T 9022 FORMAT ( ' TEST WMINIT : UNIT NUMBERS FOR INTPUT FILES'/     &
-!/T                               15X,'GRID MDSF(JFIRST-7)')
+!/T                               15X,'GRID MDSF(JFIRST-9)')
 !/T 9030 FORMAT ( ' TEST WMINIT : FILE EXTENSIONS, INPUT FLAGS,',     &
 !/T               ' RANK AND GROUP, PROC RANGE')
 !/T 9031 FORMAT ( '            ',I3,1X,A,20L2,2I4,2F6.2)
@@ -2983,6 +3141,8 @@
 !/T 9050 FORMAT ( ' TEST WMINIT : GRID NUMBER',I3,' =================')
 !/T 9051 FORMAT ( ' TEST WMINIT : ODAT   : ',I9.8,I7.6,I7,I9.8,I7.6,  &
 !/T                                  5(/24X,I9.8,I7.6,I7,I9.8,I7.6) )
+!/T 9053 FORMAT ( ' TEST WMINITNML : OUTFF   : ',I9.8 &
+!/T                                  5(/24X,I9.8) )
 !/T 9052 FORMAT ( ' TEST WMINIT : FLGRD  : ',5(5L2,1X)/24X,5(5L2,1X))
 !
 !/T 9060 FORMAT ( ' TEST WMINIT : GRID MOVEMENT DATA')
@@ -2998,7 +3158,7 @@
 !/T 9081 FORMAT ( '               MODEL AND TIME   :',I4,I10.8,I8.6)
 !/T 9082 FORMAT ( '               STATUS AND TIMES :',I4,3(I10.8,I8.6))
 !/T 9083 FORMAT ( ' TEST WMINIT : IDINP AFTER INITIALIZATION :')
-!/T 9084 FORMAT ( '               ',I4,15(2X,A3))
+!/T 9084 FORMAT ( '               ',I4,17(2X,A3))
 !/
 !/ End of WMINIT ----------------------------------------------------- /
 !/
@@ -3017,7 +3177,7 @@
 !/                  | WAVEWATCH III           NOAA/NCEP |
 !/                  |           H. L. Tolman            |
 !/                  |                        FORTRAN 90 |
-!/                  | Last update :         15-May-2018 |
+!/                  | Last update :         22-Mar-2021 |
 !/                  +-----------------------------------+
 !/
 !/    13-Jun-2005 : Origination.                        ( version 3.07 )
@@ -3061,6 +3221,7 @@
 !/                  Add ESMF override for STIME & ETIME ( version 6.02 )
 !/                  (T. J. Campbell, NRL)
 !/    15-May-2018 : Update namelist                     ( version 6.05 )
+!/    22-Mar-2021 : Add momentum and air density input  ( version 7.xx )
 !/
 !  1. Purpose :
 !
@@ -3156,7 +3317,7 @@
 !       time by using /var/tmp/ for log files. 
 !       See commented line at "OPEN (MDSO,FILE=..."
 !
-!     - IDFLDS dimensioning is hardwired as IDFLDS(-7:7) where lowest possible 
+!     - IDFLDS dimensioning is hardwired as IDFLDS(-7:9) where lowest possible 
 !       value of JFIRST is JFIRST=-7
 !
 !  8. Structure :
@@ -3252,6 +3413,7 @@
       USE W3WDATMD, ONLY: W3NDAT, W3SETW
       USE W3ADATMD, ONLY: W3NAUX, W3SETA
       USE W3ODATMD, ONLY: W3NOUT, W3SETO
+      USE W3ODATMD, ONLY:  OFILES
       USE W3IDATMD, ONLY: W3NINP, W3SETI, W3DIMI
       USE WMMDATMD, ONLY: WMNDAT, WMSETM, WMDIMD
 !
@@ -3265,7 +3427,7 @@
 !/
       USE W3SERVMD, ONLY: ITRACE, EXTCDE, NEXTLN, WWDATE, WWTIME
 !/S      USE W3SERVMD, ONLY: STRACE
-!/MPRF      USE W3SERVMD, ONLY: PRINIT, PRTIME
+!/MPRF      USE W3TIMEMD, ONLY: PRINIT, PRTIME
       USE W3TIMEMD, ONLY: STME21, DSEC21, TICK21, TDIFF
       USE WMUNITMD, ONLY: WMUINI, WMUDMP, WMUSET, WMUGET, WMUINQ
 !/
@@ -3327,7 +3489,7 @@
       TYPE OT2TPE
         INTEGER                    :: NPTS
         REAL, POINTER              :: X(:), Y(:)
-        CHARACTER(LEN=10), POINTER :: PNAMES(:)
+        CHARACTER(LEN=40), POINTER :: PNAMES(:)
       END TYPE OT2TPE
 !
       TYPE(OT2TPE), ALLOCATABLE    :: OT2(:)
@@ -3338,7 +3500,8 @@
                                  NPTS, JJ, IP1, IPN, MPI_COMM_LOC,     &
                                  NMPSC2, JJJ, NCPROC, NPOUTT, NAPLOC,  &
                                  NAPRES, NAPADD, NAPBCT, IFI, IFJ, IW, &
-                                 IFT, ILOOP
+                                 IFT, ILOOP 
+!
       INTEGER                 :: TTIME(2), TOUT(2), STMPT(2), ETMPT(2),&
                                  TLST(2)
 !/MPI      INTEGER                 :: IERR_MPI, BGROUP, LGROUP, IROOT
@@ -3347,7 +3510,8 @@
       INTEGER, ALLOCATABLE    :: MDS(:,:), NTRACE(:,:), ODAT(:,:),     &
                                  TMPRNK(:), TMPGRP(:), NINGRP(:),      &
                                  TMOVE(:,:), LOADMP(:,:), IPRT(:,:),   &
-                                 NDPOUT(:)
+                                 NDPOUT(:)                             &
+                                 ,OUTFF(:,:)
 !
       REAL                    :: DTTST, XX, YY
 !/MPRF      REAL                    :: PRFT0, PRFTN
@@ -3356,7 +3520,7 @@
       REAL, ALLOCATABLE       :: X(:), Y(:), AMOVE(:), DMOVE(:),       &
                                  RP1(:), RPN(:)
 !
-      LOGICAL                 :: FLT, TFLAGI, TFLAGS(-7:12), PSHARE
+      LOGICAL                 :: FLT, TFLAGI, TFLAGS(-7:14), PSHARE
       LOGICAL, ALLOCATABLE    :: FLGRD(:,:,:), FLRBPI(:), BCDTMP(:),   &
                                  USEINP(:), LPRT(:), FLGR2(:,:,:),     &
                                  FLGD(:,:), FLG2(:,:), FLG2D(:,:),     &
@@ -3364,22 +3528,25 @@
 !
       CHARACTER(LEN=1)        :: COMSTR
       CHARACTER(LEN=256)      :: TMPLINE, TEST
-      CHARACTER(LEN=3)        :: IDSTR(-7:7), IDTST
+      CHARACTER(LEN=3)        :: IDSTR(-7:9), IDTST
       CHARACTER(LEN=5)        :: STOUT, OUTSTR(6)
       CHARACTER(LEN=6)        :: YESXX, XXXNO
       CHARACTER(LEN=6),                                                &
                   ALLOCATABLE :: ACTION(:)
       CHARACTER(LEN=8)        :: LFILE, STTIME
 !/SHRD      CHARACTER(LEN=9)        :: TFILE
-      CHARACTER(LEN=13)       :: STDATE, PN, MN, TNAMES(7)
+      CHARACTER(LEN=13)       :: STDATE, MN, TNAMES(9)
+      CHARACTER(LEN=40)       :: PN
       CHARACTER(LEN=13),                                               &
-                  ALLOCATABLE :: INAMES(:,:), MNAMES(:), PNAMES(:)
+                  ALLOCATABLE :: INAMES(:,:), MNAMES(:)
+      CHARACTER(LEN=40),                                               &
+                  ALLOCATABLE :: PNAMES(:)
       CHARACTER(LEN=12)       :: FORMAT
 !/DIST      CHARACTER(LEN=18)       :: TFILE
 !/MPRF      CHARACTER(LEN=18)       :: PFILE
-      CHARACTER(LEN=13)       :: IDFLDS(-7:7)
+      CHARACTER(LEN=13)       :: IDFLDS(-7:9)
       CHARACTER(LEN=23)       :: DTME21
-      CHARACTER(LEN=30)       :: IDOTYP(7)
+      CHARACTER(LEN=30)       :: IDOTYP(8)
       CHARACTER(LEN=80)       :: TNAME, LINE
       CHARACTER(LEN=1024)     :: FLDOUT
 !
@@ -3395,6 +3562,7 @@
                     'mud viscos.  ' ,                                 &
                     'water levels ' , 'currents     ' ,               &
                     'winds        ' , 'ice fields   ' ,               &
+                    'momentum     ' , 'air density  ' ,               &
                     'mean param.  ' , '1D spectra   ' ,               &
                     '2D spectra   ' /
 !
@@ -3404,11 +3572,13 @@
                     'Restart files                 ' ,                &
                     'Nesting data                  ' ,                &
                     'Separated wave field data     ' ,                &
-                    'Fields for coupling           ' /
+                    'Fields for coupling           ' ,                &
+                    'Restart files second request  '/
 !
       DATA IDSTR  / 'IC1', 'IC2', 'IC3', 'IC4', 'IC5',                &
                     'MDN', 'MTH', 'MVS', 'LEV', 'CUR',                &
-                    'WND', 'ICE', 'DT0', 'DT1', 'DT2' /
+                    'WND', 'ICE', 'TAU', 'RHO', 'DT0',                &
+                    'DT1', 'DT2' /
 !
       DATA YESXX  / 'YES/--' /
       DATA XXXNO  / '---/NO' /
@@ -3601,11 +3771,12 @@
 !
 ! 2.c Set up I/O for individual models (initial)
 !
-      ALLOCATE ( MDS(13,NRGRD), NTRACE(2,NRGRD), ODAT(35,0:NRGRD),    &
+      ALLOCATE ( MDS(13,NRGRD), NTRACE(2,NRGRD), ODAT(40,0:NRGRD),    &
            FLGRD(NOGRP,NGRPP,NRGRD), OT2(0:NRGRD), FLGD(NOGRP,NRGRD), &
-           MDSF(-NRINP:NRGRD,JFIRST:7), IPRT(6,NRGRD), LPRT(NRGRD),   &
+           MDSF(-NRINP:NRGRD,JFIRST:9), IPRT(6,NRGRD), LPRT(NRGRD),   &
            FLGR2(NOGRP,NGRPP,NRGRD),FLG2D(NOGRP,NGRPP), FLG1D(NOGRP), &
-           FLG2(NOGRP,NRGRD) )
+           FLG2(NOGRP,NRGRD)                                          &
+           ,OUTFF(7,0:NRGRD))
 !
       MDS    = -1
       MDSF   = -1
@@ -3651,7 +3822,7 @@
 !                   sources, and from communication rather than
 !                   files.
 !
-      ALLOCATE ( INAMES(2*NRGRD,-7:7), MNAMES(-NRINP:2*NRGRD),     &
+      ALLOCATE ( INAMES(2*NRGRD,-7:9), MNAMES(-NRINP:2*NRGRD),     &
                  TMPRNK(2*NRGRD), TMPGRP(2*NRGRD), NINGRP(2*NRGRD),    &
                  RP1(2*NRGRD), RPN(2*NRGRD), BCDTMP(NRGRD+1:2*NRGRD))
       ALLOCATE ( GRANK(NRGRD), GRGRP(NRGRD), USEINP(NRINP) )
@@ -3684,9 +3855,11 @@
         INFLAGS1(2) = NML_INPUT_GRID(I)%FORCING%CURRENTS
         INFLAGS1(3) = NML_INPUT_GRID(I)%FORCING%WINDS
         INFLAGS1(4) = NML_INPUT_GRID(I)%FORCING%ICE_CONC
-        INFLAGS1(5) = NML_INPUT_GRID(I)%ASSIM%MEAN
-        INFLAGS1(6) = NML_INPUT_GRID(I)%ASSIM%SPEC1D
-        INFLAGS1(7) = NML_INPUT_GRID(I)%ASSIM%SPEC2D
+        INFLAGS1(5) = NML_INPUT_GRID(I)%FORCING%ATM_MOMENTUM
+        INFLAGS1(6) = NML_INPUT_GRID(I)%FORCING%AIR_DENSITY
+        INFLAGS1(7) = NML_INPUT_GRID(I)%ASSIM%MEAN
+        INFLAGS1(8) = NML_INPUT_GRID(I)%ASSIM%SPEC1D
+        INFLAGS1(9) = NML_INPUT_GRID(I)%ASSIM%SPEC2D
       END DO
 !
 ! 3.a.2 Unified point output grid.
@@ -3725,9 +3898,11 @@
         INAMES(NRGRD+I,2) = NML_MODEL_GRID(I)%FORCING%CURRENTS
         INAMES(NRGRD+I,3) = NML_MODEL_GRID(I)%FORCING%WINDS
         INAMES(NRGRD+I,4) = NML_MODEL_GRID(I)%FORCING%ICE_CONC
-        INAMES(NRGRD+I,5) = NML_MODEL_GRID(I)%ASSIM%MEAN
-        INAMES(NRGRD+I,6) = NML_MODEL_GRID(I)%ASSIM%SPEC1D
-        INAMES(NRGRD+I,7) = NML_MODEL_GRID(I)%ASSIM%SPEC2D
+        INAMES(NRGRD+I,5) = NML_MODEL_GRID(I)%FORCING%ATM_MOMENTUM
+        INAMES(NRGRD+I,6) = NML_MODEL_GRID(I)%FORCING%AIR_DENSITY
+        INAMES(NRGRD+I,7) = NML_MODEL_GRID(I)%ASSIM%MEAN
+        INAMES(NRGRD+I,8) = NML_MODEL_GRID(I)%ASSIM%SPEC1D
+        INAMES(NRGRD+I,9) = NML_MODEL_GRID(I)%ASSIM%SPEC2D
         TMPRNK(NRGRD+I) = NML_MODEL_GRID(I)%RESOURCE%RANK_ID
         TMPGRP(NRGRD+I) = NML_MODEL_GRID(I)%RESOURCE%GROUP_ID
         RP1(NRGRD+I) = NML_MODEL_GRID(I)%RESOURCE%COMM_FRAC(1)
@@ -3749,8 +3924,8 @@
               I      = I + 1
               CALL W3SETI ( I, MDSE, MDST )
               INFLAGS1      = .FALSE.
-!/MGW              INFLAGS1(8)   = .TRUE.
-!/MGP              INFLAGS1(8)   = .TRUE.
+!/MGW              INFLAGS1(10)   = .TRUE.
+!/MGP              INFLAGS1(10)   = .TRUE.
               INAMES(I,:)= INAMES(J,:)
               MNAMES(I)  = MNAMES(J)
               TMPRNK(I)  = TMPRNK(J)
@@ -3768,13 +3943,13 @@
 !
 ! 3.a.5 Set input flags
 !
-      ALLOCATE ( INPMAP(NRGRD,JFIRST:8), IDINP(-NRINP:NRGRD,JFIRST:8) )
+      ALLOCATE ( INPMAP(NRGRD,JFIRST:10), IDINP(-NRINP:NRGRD,JFIRST:10) )
       INPMAP = 0
       IDINP  = '---'
 !
       DO I=1, NRGRD
          CALL W3SETI ( I, MDSE, MDST )
-         DO J=JFIRST, 7
+         DO J=JFIRST, 9
             IF ( INAMES(I,J) .EQ. 'native' ) THEN
             ! *** forcing input from file & defined on the native grid ***
                 INFLAGS1(J) = .TRUE.
@@ -3815,7 +3990,7 @@
 !        INFLAGS2 is initial value of INFLAGS1. Unlike INFLAGS1, 
 !           it does not change during the simulation
          IF(.NOT. INFLAGS2(J)) INFLAGS2(J)=INFLAGS1(J)
-         END DO !         DO J=JFIRST, 7
+         END DO !         DO J=JFIRST, 9
       END DO !      DO I=1, NRGRD
 !
       DO I=1, NRINP
@@ -3831,7 +4006,7 @@
       DO I=-NRINP, NRGRD
         IF ( I .EQ. 0 ) CYCLE
         CALL W3SETI ( I, MDSE, MDST )
-        DO J=JFIRST, 7
+        DO J=JFIRST, 9
           IF ( I .GE. 1 ) THEN
               IF ( INPMAP(I,J) .LT. 0 ) CYCLE
             END IF
@@ -3847,7 +4022,7 @@
 !/T      WRITE (MDST,9022)
 !/T      DO I=-NRINP, NRGRD
 !/T        IF ( I .EQ. 0 ) CYCLE
-!/T        WRITE (MDST,9021) I, MDSF(I,JFIRST:7)
+!/T        WRITE (MDST,9021) I, MDSF(I,JFIRST:9)
 !/T        END DO
 !
 ! 3.c Set rank and group data
@@ -3945,18 +4120,18 @@
           DO I=1, NRINP
             IF ( .NOT. USEINP(I) ) CYCLE
             CALL W3SETI ( -I, MDSE, MDST )
-            ACTION(1:4) = '---   '
-            DO J=JFIRST, 4
+            ACTION(1:6) = '---   '
+            DO J=JFIRST, 6
               IF ( INFLAGS1(J) ) ACTION(J) = ' X    '
               END DO
-            ACTION(5:7) = '-     '
-            IF ( INFLAGS1(5) ) ACTION(5) = '1     '
-            IF ( INFLAGS1(6) ) ACTION(6) = '2     '
-            IF ( INFLAGS1(7) ) ACTION(7) = '3     '
+            ACTION(7:9) = '-     '
+            IF ( INFLAGS1(7) ) ACTION(7) = '1     '
+            IF ( INFLAGS1(8) ) ACTION(8) = '2     '
+            IF ( INFLAGS1(9) ) ACTION(9) = '3     '
             IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC )                &
-                WRITE (MDSS,925) I, MNAMES(-I), ACTION(JFIRST:7)
+                WRITE (MDSS,925) I, MNAMES(-I), ACTION(JFIRST:9)
             IF ( NMPLOG .EQ. IMPROC )                                 &
-                WRITE (MDSO,925) I, MNAMES(-I), ACTION(JFIRST:7)
+                WRITE (MDSO,925) I, MNAMES(-I), ACTION(JFIRST:9)
             END DO
           IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC ) WRITE (MDSS,926)
           IF ( NMPLOG .EQ. IMPROC ) WRITE (MDSO,926)
@@ -3977,8 +4152,8 @@
       IF ( NMPLOG .EQ. IMPROC ) WRITE (MDSO,930)
       DO I=1, NRGRD
         CALL W3SETI ( I, MDSE, MDST )
-        ACTION(1:4) = '---   '
-        DO J=JFIRST, 4
+        ACTION(1:6) = '---   '
+        DO J=JFIRST, 6
           IF ( INFLAGS1(J) .AND. INPMAP(I,J) .EQ. 0 ) THEN
               ACTION(J) = 'native'
             ELSE IF ( INFLAGS1(J) .AND. INPMAP(I,J) .EQ. -999 ) THEN
@@ -3989,22 +4164,22 @@
               ACTION(J) = MNAMES( INPMAP(I,J))
             END IF
           END DO
-        ACTION(5:9) = '-     '
-        IF ( INFLAGS1(5) ) ACTION(5) = '1     '
-        IF ( INFLAGS1(6) ) ACTION(6) = '2     '
-        IF ( INFLAGS1(7) ) ACTION(7) = '3     '
-        IF ( INFLAGS1(8) ) THEN
-            ACTION(8) = 'yes   '
+        ACTION(7:11) = '-     '
+        IF ( INFLAGS1(7) ) ACTION(7) = '1     '
+        IF ( INFLAGS1(8) ) ACTION(8) = '2     '
+        IF ( INFLAGS1(9) ) ACTION(9) = '3     '
+        IF ( INFLAGS1(10) ) THEN
+            ACTION(10) = 'yes   '
           ELSE
-            ACTION(8) = 'no    '
+            ACTION(10) = 'no    '
           END IF
-        IF ( BCDUMP(I) ) ACTION(9) = 'y     '
+        IF ( BCDUMP(I) ) ACTION(11) = 'y     '
         IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC )                    &
-            WRITE (MDSS,931) I, MNAMES(I), ACTION(1:8), GRANK(I),     &
-                             GRGRP(I), ACTION(9)
+            WRITE (MDSS,931) I, MNAMES(I), ACTION(1:10), GRANK(I),     &
+                             GRGRP(I), ACTION(11)
         IF ( NMPLOG .EQ. IMPROC )                                     &
-            WRITE (MDSO,931) I, MNAMES(I), ACTION(1:8), GRANK(I),     &
-                             GRGRP(I), ACTION(9)
+            WRITE (MDSO,931) I, MNAMES(I), ACTION(1:10), GRANK(I),     &
+                             GRGRP(I), ACTION(11)
       END DO
       IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC ) WRITE (MDSS,932)
       IF ( NMPLOG .EQ. IMPROC ) WRITE (MDSO,932)
@@ -4100,15 +4275,20 @@
         READ(NML_OUTPUT_DATE(I)%FIELD%START, *)   ODAT(1,I), ODAT(2,I)
         READ(NML_OUTPUT_DATE(I)%FIELD%STRIDE, *)  ODAT(3,I)
         READ(NML_OUTPUT_DATE(I)%FIELD%STOP, *)    ODAT(4,I), ODAT(5,I)
+        READ(NML_OUTPUT_DATE(I)%FIELD%OUTFFILE, *)  OUTFF(1,I)
         READ(NML_OUTPUT_DATE(I)%POINT%START, *)   ODAT(6,I), ODAT(7,I)
         READ(NML_OUTPUT_DATE(I)%POINT%STRIDE, *)  ODAT(8,I)
         READ(NML_OUTPUT_DATE(I)%POINT%STOP, *)    ODAT(9,I), ODAT(10,I)
+        READ(NML_OUTPUT_DATE(I)%POINT%OUTFFILE, *)  OUTFF(2,I)
         READ(NML_OUTPUT_DATE(I)%TRACK%START, *)   ODAT(11,I), ODAT(12,I)
         READ(NML_OUTPUT_DATE(I)%TRACK%STRIDE, *)  ODAT(13,I)
         READ(NML_OUTPUT_DATE(I)%TRACK%STOP, *)    ODAT(14,I), ODAT(15,I)
         READ(NML_OUTPUT_DATE(I)%RESTART%START, *)   ODAT(16,I), ODAT(17,I)
         READ(NML_OUTPUT_DATE(I)%RESTART%STRIDE, *)  ODAT(18,I)
         READ(NML_OUTPUT_DATE(I)%RESTART%STOP, *)    ODAT(19,I), ODAT(20,I)
+        READ(NML_OUTPUT_DATE(I)%RESTART2%START, *)   ODAT(36,I), ODAT(37,I)
+        READ(NML_OUTPUT_DATE(I)%RESTART2%STRIDE, *)  ODAT(38,I)
+        READ(NML_OUTPUT_DATE(I)%RESTART2%STOP, *)    ODAT(39,I), ODAT(40,I)
         READ(NML_OUTPUT_DATE(I)%BOUNDARY%START, *)   ODAT(21,I), ODAT(22,I)
         READ(NML_OUTPUT_DATE(I)%BOUNDARY%STRIDE, *)  ODAT(23,I)
         READ(NML_OUTPUT_DATE(I)%BOUNDARY%STOP, *)    ODAT(24,I), ODAT(25,I)
@@ -4128,6 +4308,7 @@
         ODAT(23,I) = MAX ( 0 , ODAT(23,I) )
         ODAT(28,I) = MAX ( 0 , ODAT(28,I) )
 !!/COU        ODAT(33,I) = MAX ( 0 , ODAT(33,I) )
+        ODAT(38,I) = MAX ( 0 , ODAT(38,I) )
 
         ! define the time of the output point grid (index 0) as the   &
         ! time of the first grid which should be the larger one by convention
@@ -4143,6 +4324,7 @@
 !
 ! 5.b Process standard line
 !
+          OUTPTS(I)%OFILES(J)=OUTFF(J,I)              
           IF ( ODAT(5*(J-1)+3,I) .NE. 0 ) THEN
               IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC )                &
                   WRITE (MDSS,951) J, IDOTYP(J)
@@ -4173,7 +4355,7 @@
                     END DO
                   WRITE (MDSS,954) DTME21(1:19)
                 END IF
-
+!
               IF ( J .EQ. 1 ) THEN
 !
 ! 5.c Type 1: fields of mean wave parameters
@@ -4351,6 +4533,45 @@
 ! ... End of loop J on NOTYPE in 5.a
 !
         END DO
+!xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+!  Checkpoint
+        J=8
+            !OUTPTS(I)%FLOUT(8)=.FALSE.
+          IF ( ODAT(5*(J-1)+3,I) .NE. 0 ) THEN
+             !OUTPTS(I)%FLOUT(8)=.TRUE.
+              IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC )                &
+                  WRITE (MDSS,951) J, IDOTYP(J)
+              TTIME(1) = ODAT(5*(J-1)+1,I)
+              TTIME(2) = ODAT(5*(J-1)+2,I)
+              CALL STME21 ( TTIME , DTME21 )
+              IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC )                &
+                   WRITE (MDSS,952) DTME21
+              TTIME(1) = ODAT(5*(J-1)+4,I)
+              TTIME(2) = ODAT(5*(J-1)+5,I)
+              CALL STME21 ( TTIME , DTME21 )
+              IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC )                &
+                   WRITE (MDSS,953) DTME21
+              TTIME(1) = 0
+              TTIME(2) = 0
+              DTTST    = REAL ( ODAT(5*(J-1)+3,I) )
+              CALL TICK21 ( TTIME , DTTST  )
+              CALL STME21 ( TTIME , DTME21 )
+              IF ( ( ODAT(5*(J-1)+1,I) .NE. ODAT(5*(J-1)+4,I) .OR.      &
+                     ODAT(5*(J-1)+2,I) .NE. ODAT(5*(J-1)+5,I) ) .AND.   &
+                     MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC ) THEN
+                  DO II=1, 18
+                    IF ( DTME21(II:II).NE.'0' .AND.                     &
+                         DTME21(II:II).NE.'/' .AND.                     &
+                         DTME21(II:II).NE.' ' .AND.                     &
+                         DTME21(II:II).NE.':' ) EXIT
+                    DTME21(II:II) = ' '
+                    END DO
+                  WRITE (MDSS,954) DTME21(1:19)
+                END IF
+            !ELSE
+            !OUTPTS(I)%FLOUT(8) = .FALSE.
+          END IF
+!xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 !
 ! ... End of loop I on NRGRD in 5.a
 !
@@ -4358,7 +4579,7 @@
 !
 !/T      DO I=1, NRGRD
 !/T          WRITE (MDST,9050) I
-!/T          WRITE (MDST,9051) ODAT(:,I)
+!/T          WRITE (MDST,9053) ODAT(:,I)
 !/T          WRITE (MDST,9052) FLGRD(:,:,I)
 !/T        END DO
 !
@@ -4368,7 +4589,7 @@
 !     the grids, because this is only intended for test cases. 
 !     For true implementations, the jumping grid will be used.
 !
-      IF ( INFLAGS1(8) ) THEN
+      IF ( INFLAGS1(10) ) THEN
 !
           IF ( MDSS.NE.MDSO .AND. NMPSCR.EQ.IMPROC ) THEN
               WRITE (MDSS,965)
@@ -4467,8 +4688,13 @@
             IF ( ODAT( 3,I) .GT. 0 ) NDPOUT(I) = NDPOUT(I) + 1
             IF ( ODAT(13,I) .GT. 0 ) NDPOUT(I) = NDPOUT(I) + 1
             IF ( ODAT(28,I) .GT. 0 ) NDPOUT(I) = NDPOUT(I) + 1
+!xxx
+! Checkpoint 
+            IF ( ODAT(38,I) .GT. 0 ) NDPOUT(I) = NDPOUT(I) + 1
+!xxx
             IF ( ODAT( 8,I) .GT. 0 .OR.  ODAT(18,I) .GT. 0 .OR.       &
-                 ODAT(23,I) .GT. 0 ) NDPOUT(I) = NDPOUT(I) + 1
+                 ODAT(23,I) .GT. 0 )          &
+                                           NDPOUT(I) = NDPOUT(I) + 1
             IF ( IOSTYP .EQ. 2 ) NDPOUT(I) = MIN ( 1 , NDPOUT(I) )
             END DO
         END IF
@@ -4853,7 +5079,7 @@
 ! ..... Model initialization
 !
         IF ( MDSS.NE.MDSO .AND. NMPSC2.EQ.IMPROC ) WRITE (MDSS,982)
-
+!
         CALL W3INIT ( I, .TRUE., MNAMES(I), MDS(:,I), NTRACE(:,I), ODAT(:,I), &
                       FLGRD(:,:,I),FLGR2(:,:,I),FLGD(:,I),FLG2(:,I),  &
                       OT2(I)%NPTS, OT2(I)%X, OT2(I)%Y, OT2(I)%PNAMES, &
@@ -4949,7 +5175,7 @@
 !
 ! ..... regular input files
 !
-        DO J=JFIRST, 4
+        DO J=JFIRST, 6
           IF ( INFLAGS1(J) ) THEN
               IDINP(I,J) = IDSTR(J)
               IF ( INPMAP(I,J) .LT. 0 ) CYCLE
@@ -4971,7 +5197,7 @@
 !
 ! ..... finalize file info data base
 !
-        DO J=JFIRST, 7
+        DO J=JFIRST, 9
           IF ( MDSF(I,J) .NE. -1 ) CALL WMUINQ ( MDSE, MDST, MDSF(I,J) )
           END DO
 !
@@ -4991,7 +5217,7 @@
 
         TFLAGS = INFLAGS1
 !
-        DO J=JFIRST, 7
+        DO J=JFIRST, 9
           IF ( INPMAP(I,J) .NE. 0 ) THEN
 !
               TFLAGS(J) = .TRUE.
@@ -5012,6 +5238,11 @@
                                        WADATS(I)%AS0(NSEA) ,          &
                                        WADATS(I)%ASI(NSEA) )
 !
+              IF ( J.EQ.5 ) ALLOCATE ( WADATS(I)%MA0(NSEA) ,          &
+                                       WADATS(I)%MAI(NSEA) ,          &
+                                       WADATS(I)%MD0(NSEA) ,          &
+                                       WADATS(I)%MDI(NSEA) )
+!
             END IF
           END DO
 !
@@ -5031,6 +5262,25 @@
                 ENDIF
             END IF
           END DO
+!
+! Checkpoint
+        J=8
+            OUTPTS(I)%FLOUT(8)=.FALSE.
+          IF ( ODAT(5*(J-1)+3,I) .NE. 0 ) THEN
+             OUTPTS(I)%FLOUT(8)=.TRUE.
+          ELSE
+              OUTPTS(I)%FLOUT(8)=.FALSE.
+          ENDIF
+
+          IF ( FLOUT(J) ) THEN
+              IF ( TOUTP(1,I) .EQ. -1 ) THEN
+                  TOUTP(:,I) = TONEXT(:,J)
+                ELSE
+                  DTTST  = DSEC21 ( TOUTP(:,I), TONEXT(:,J) )
+                  IF ( DTTST .LT. 0. ) TOUTP(:,I) = TONEXT(:,J)
+                ENDIF
+            END IF
+!
 !
         GRSTAT(I) =  0
         TSYNC(:,I) = TIME(:)
@@ -5130,13 +5380,13 @@
 !/MPI            CALL MPI_BCAST ( NBI  , 1, MPI_INTEGER, 0,           &
 !/MPI                             MPI_COMM_BCT, IERR_MPI )
 !
-!/MPI            CALL MPI_BCAST ( FLOUT,  7, MPI_LOGICAL, 0,          &
+!/MPI            CALL MPI_BCAST ( FLOUT,  8, MPI_LOGICAL, 0,          &
 !/MPI                             MPI_COMM_BCT, IERR_MPI )
-!/MPI            CALL MPI_BCAST ( DTOUT , 7, MPI_REAL, 0,             &
+!/MPI            CALL MPI_BCAST ( DTOUT , 8, MPI_REAL, 0,             &
 !/MPI                             MPI_COMM_BCT, IERR_MPI )
-!/MPI            CALL MPI_BCAST ( TONEXT,14, MPI_INTEGER, 0,          &
+!/MPI            CALL MPI_BCAST ( TONEXT,16, MPI_INTEGER, 0,          &
 !/MPI                             MPI_COMM_BCT, IERR_MPI )
-!/MPI            CALL MPI_BCAST ( TOLAST,14, MPI_INTEGER, 0,          &
+!/MPI            CALL MPI_BCAST ( TOLAST,16, MPI_INTEGER, 0,          &
 !/MPI                             MPI_COMM_BCT, IERR_MPI )
 !
 !/MPI          END IF
@@ -5184,7 +5434,7 @@
 !
         IF ( CPLINP(I) ) CYCLE
 !
-        DO J=JFIRST, 4
+        DO J=JFIRST, 6
           IF ( INFLAGS1(J) ) THEN
               IDINP(-I,J) = IDSTR(J)
               CALL W3FLDO ('READ', IDINP(-I,J), MDSF(-I,J), MDST,     &
@@ -5201,7 +5451,7 @@
 !
 ! Skipping assimilation input files for now.
 !
-          DO J=JFIRST, 7
+          DO J=JFIRST, 9
             IF ( MDSF(-I,J) .NE. -1 ) CALL WMUINQ                     &
                                          ( MDSE, MDST, MDSF(-I,J) )
             END DO
@@ -5209,7 +5459,7 @@
         END DO
 !
       DO I=1, NRGRD
-        DO J=JFIRST, 7
+        DO J=JFIRST, 9
           IF ( INPMAP(I,J) .LT. 0 ) IDINP(I,J) = IDINP( INPMAP(I,J),J)
           IF ( INPMAP(I,J) .GT. 0 ) IDINP(I,J) = IDINP(-INPMAP(I,J),J)
           END DO
@@ -5621,10 +5871,13 @@
  3923 FORMAT ( '  Grids share output procs : ',A)
 !
   924 FORMAT (/'  Input grid information : '/                         &
-               '  nr extension  lev.   cur.   wind   ice    data'/    &
-               ' -------------------------------------------------')
-  925 FORMAT (1X,I3,1X,A10,4(1X,A6),3(1X,A1))
-  926 FORMAT ( ' -------------------------------------------------')
+               '  nr extension  lev.   cur.   wind   ice    tau',     &
+               '    rho    data'/    &
+               ' ----------------------------------------------',     &
+               '---------------')
+  925 FORMAT (1X,I3,1X,A10,6(1X,A6),3(1X,A1))
+  926 FORMAT ( ' ----------------------------------------------',     &
+               '---------------')
 !
   927 FORMAT (/'  Grid for point output : '/                          &
                '  nr extension  '/ ' ---------------')
@@ -5632,13 +5885,13 @@
   929 FORMAT ( ' ---------------')
 !
   930 FORMAT (/'  Wave grid information : '/                          &
-               '  nr extension  lev.   cur.   wind   ice    data',    &
-               '   move1 rnk grp dmp'/                                &
+               '  nr extension  lev.   cur.   wind   ice    tau',     &
+               '    rho    data   move1 rnk grp dmp'/                 &
                ' -----------------------------------------------',    &
-               '---------------------')
-  931 FORMAT (1X,I3,1X,A10,4(1X,A6),3(1X,A1),2X,A4,2I4,3X,A1)
+               '-----------------------------------')
+  931 FORMAT (1X,I3,1X,A10,6(1X,A6),3(1X,A1),2X,A4,2I4,3X,A1)
   932 FORMAT ( ' -----------------------------------------------',    &
-               '---------------------'/)
+               '-----------------------------------'/)
   933 FORMAT ( '  ',A,' : '/                                          &
                '  nr   grids (part of comm.)'/                        &
                ' -----------------------------------------------',    &
@@ -5796,7 +6049,7 @@
 !/T                               15X,'GRID MDS(1-13)',43X,'NTRACE')
 !/T 9021 FORMAT (14X,16I4)
 !/T 9022 FORMAT ( ' TEST WMINITNML : UNIT NUMBERS FOR INTPUT FILES'/   &
-!/T                               15X,'GRID MDSF(JFIRST-7)')
+!/T                               15X,'GRID MDSF(JFIRST-9)')
 !/T 9030 FORMAT ( ' TEST WMINITNML : FILE EXTENSIONS, INPUT FLAGS,',   &
 !/T               ' RANK AND GROUP, PROC RANGE')
 !/T 9031 FORMAT ( '            ',I3,1X,A,20L2,2I4,2F6.2)
@@ -5825,7 +6078,7 @@
 !/T 9081 FORMAT ( '               MODEL AND TIME   :',I4,I10.8,I8.6)
 !/T 9082 FORMAT ( '               STATUS AND TIMES :',I4,3(I10.8,I8.6))
 !/T 9083 FORMAT ( ' TEST WMINITNML : IDINP AFTER INITIALIZATION :')
-!/T 9084 FORMAT ( '               ',I4,15(2X,A3))
+!/T 9084 FORMAT ( '               ',I4,17(2X,A3))
 !/
 !/ End of WMINITNML ----------------------------------------------------- /
 !/
