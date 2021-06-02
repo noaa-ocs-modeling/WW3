@@ -50,6 +50,8 @@
 !     INPUT(I)%FORCING%WATER_LEVELS  = F
 !     INPUT(I)%FORCING%CURRENTS      = F
 !     INPUT(I)%FORCING%WINDS         = F
+!     INPUT(I)%FORCING%ATM_MOMENTUM  = F
+!     INPUT(I)%FORCING%AIR_DENSITY   = F
 !     INPUT(I)%FORCING%ICE_CONC      = F
 !     INPUT(I)%FORCING%ICE_PARAM1    = F
 !     INPUT(I)%FORCING%ICE_PARAM2    = F
@@ -186,7 +188,8 @@
 !
 ! * need DOMAIN%UNIPTS equal true to use a unified point output file
 !
-! * the point file is a space separated values per line : lon lat 'name'
+! * the point file is a space separated values per line :
+!   longitude latitude 'name' (C*40)
 !
 ! * the detailed list of field names is given in model/nml/ww3_shel.nml :
 !  DPT CUR WND AST WLV ICE IBG D50 IC1 IC5
